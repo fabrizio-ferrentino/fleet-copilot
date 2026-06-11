@@ -69,6 +69,10 @@ docker exec fleet-postgres psql -U fleet -d fleet \
   -c "SELECT id, last_seen, last_status, last_battery_pct FROM devices LIMIT 5"
 ```
 
+> Postgres is published on host port **5433** (container port stays 5432) so it never
+> clashes with a locally installed PostgreSQL. Connect GUI tools to `localhost:5433`,
+> database `fleet`, user `fleet`.
+
 Configuration lives in environment variables — see [.env.example](.env.example).
 Try feeding the broker garbage; ingestion logs the reason and keeps running:
 

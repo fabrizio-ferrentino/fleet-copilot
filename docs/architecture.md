@@ -62,6 +62,12 @@ can arrive.
 300 threads; initial publishes are staggered across one interval so the broker sees a smooth
 ~60 msg/s stream rather than a 300-message burst every 5 s.
 
+**Postgres published on host port 5433.** Inside the compose network the database listens on the
+standard 5432, but it is published to the host as 5433: many developer machines already run a
+local PostgreSQL on 5432, and colliding with it produces confusing auth failures against the
+wrong server (two listeners can even coexist silently on Windows). The platform's `DB_PORT`
+default follows suit; everything inside Docker keeps using 5432.
+
 ### Definitions
 
 - A device is **offline** when `now() - last_seen > 10 minutes` (threshold configurable from M2

@@ -17,8 +17,10 @@ services:
   postgres:
     image: timescale/timescaledb:2.17.2-pg16
     container_name: fleet-postgres
+    # Published on 5433 so it never clashes with a locally installed
+    # PostgreSQL (which typically owns 5432); inside the network it is 5432.
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-fleet}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleet}
