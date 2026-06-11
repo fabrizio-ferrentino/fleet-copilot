@@ -1,0 +1,27 @@
+# Secrets — never commit real environment files
+.env
+
+# Java / Maven
+platform/target/
+*.class
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+
+# Node (chat UI, milestone 4)
+node_modules/
+ui/dist/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
