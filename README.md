@@ -55,7 +55,10 @@ docker compose up -d
 cd platform && ./mvnw spring-boot:run
 
 # 3. simulated fleet: 300 devices, one message each every 5 s (separate terminal)
-cd simulator && pip install -e . && fleet-simulator
+cd simulator
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e .
+fleet-simulator
 ```
 
 Watch the data arrive:
