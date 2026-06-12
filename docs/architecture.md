@@ -114,6 +114,33 @@ only the worst keeps `/api/anomalies` compact enough for the agent to reason ove
 code). `clear` was added beyond the spec so demos can also show recovery. Control messages are
 validated and logged; invalid ones are ignored, never fatal.
 
+## Milestone 3 — first intelligence
+
+### Decisions
+
+**The agent calls REST tools, never the database.** The API is the same operator-grade contract
+a human would use: stable, validated, compact. The platform keeps owning query shaping and
+optimization, the agent gets no SQL surface to misuse, and every step of the investigation is a
+meaningful HTTP call that can be shown to the user as a trace.
+
+**Provider behind a one-class interface.** `loop.py` only sees neutral types (`ToolSpec`,
+`LlmTurn`, `Conversation`); Gemini lives in one class in `llm.py`. Swapping providers means
+writing one new class — but per the non-goals only Gemini is implemented.
+
+**Max 6 tool calls per question.** Bounds cost and latency, and forces the model to investigate
+decisively instead of wandering. The budget is enforced in the loop, not trusted to the model:
+past 6, requested calls receive an `{"error": "budget exhausted"}` payload, which pushes the
+model to conclude from what it already has. A separate round cap protects against a model that
+never stops calling tools.
+
+**Failures are data, not exceptions.** A dead platform or a 4xx becomes `{"error": ...}` in the
+tool result, so the model can say "I could not check X" — exactly what the system prompt demands
+when data is insufficient ("answer only from tool data; say so if it is not enough").
+
+**The trace is a first-class output.** Every call is recorded as `{tool, args, resultSummary}`;
+the CLI prints it under the answer and the M4 chat UI will render it as the "how I investigated"
+panel. Summaries are deliberately compact (counts + first ids) to stay readable.
+
 ### Measured (informal, M1)
 
 Local run, 300 devices, 5 s interval: sustained ~60 msg/s ingestion; telemetry grew
