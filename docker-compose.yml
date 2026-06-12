@@ -1,5 +1,5 @@
-# Milestone 1: infrastructure only (broker + database).
-# The platform and the simulator run locally for now; they join compose in milestone 4.
+# Full stack, one command: docker compose up --build
+# Set GEMINI_API_KEY in .env (see .env.example) before starting.
 services:
   mosquitto:
     image: eclipse-mosquitto:2.0
@@ -32,6 +32,59 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  platform:
+    build: ./platform
+    container_name: fleet-platform
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-fleet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fleet}
+      POSTGRES_DB: ${POSTGRES_DB:-fleet}
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      OFFLINE_THRESHOLD: ${OFFLINE_THRESHOLD:-10m}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+
+  agent:
+    build: ./agent
+    container_name: fleet-agent
+    ports:
+      - "8000:8000"
+    environment:
+      PLATFORM_URL: http://platform:8080
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+    depends_on:
+      - platform
+
+  ui:
+    build: ./ui
+    container_name: fleet-ui
+    ports:
+      - "5173:80"
+    depends_on:
+      - agent
+
+  simulator:
+    build: ./simulator
+    container_name: fleet-simulator
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      DEVICES: ${DEVICES:-300}
+      INTERVAL: ${INTERVAL:-5}
+      FAULTS: ${FAULTS:-}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
 
 volumes:
   pgdata:
