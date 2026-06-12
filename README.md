@@ -49,6 +49,7 @@ Requires Docker, Java 21 and Python 3.12.
 
 ```bash
 # 1. broker + database
+docker compose down -v      # -v delete old data
 docker compose up -d
 
 # 2. ingestion platform (separate terminal)

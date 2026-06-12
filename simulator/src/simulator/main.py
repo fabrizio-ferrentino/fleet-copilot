@@ -28,14 +28,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--devices",
         type=int,
-        default=int(os.getenv("DEVICES", "300")),
-        help="number of simulated devices (env DEVICES, default 300)",
+        default=int(os.getenv("DEVICES", "15")),
+        help="number of simulated devices (env DEVICES, default 15)",
     )
     parser.add_argument(
         "--interval",
         type=float,
-        default=float(os.getenv("INTERVAL", "5")),
-        help="seconds between publishes per device (env INTERVAL, default 5)",
+        default=float(os.getenv("INTERVAL", "3")),
+        help="seconds between publishes per device (env INTERVAL, default 3)",
     )
     parser.add_argument(
         "--mqtt-host",
