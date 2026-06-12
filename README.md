@@ -14,7 +14,7 @@ as its toolbox.
 |-----------|-------|--------|
 | M1 | Data flows: simulator → MQTT → ingestion → TimescaleDB | ✅ done |
 | M2 | Fleet REST API, fault injection, anomaly rules | ✅ done |
-| M3 | First agent (terminal) with tool calling | — |
+| M3 | First agent (terminal) with tool calling | ✅ done |
 | M4 | Full product: FastAPI agent, React chat UI, one-command compose | — |
 | M5 | CI, integration tests, README polish, measured numbers | — |
 
@@ -120,6 +120,33 @@ docker exec fleet-mosquitto mosquitto_pub -t fleet/control -m '{"deviceId":"dev-
 
 Demo tip: run the platform with `OFFLINE_THRESHOLD=40s` and a silenced device appears in
 `/api/anomalies` (rule `SILENT`) within a minute instead of ten.
+
+## Asking the agent
+
+The agent (Gemini with function calling) investigates the fleet by calling the REST API as
+tools — `get_fleet_status`, `list_devices`, `detect_anomalies` — then answers with evidence.
+
+```bash
+cd agent
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e .
+
+# one-off question (reads GEMINI_API_KEY from the repo .env)
+fleet-agent "Which devices are offline right now?"
+
+# or an interactive session
+fleet-agent
+```
+
+Every answer ends with the tool trace — what the agent looked at:
+
+```
+how I investigated (2 tool calls):
+  1. get_fleet_status {} -> {"total":50,"online":47,"offline":3,...}
+  2. list_devices {"status":"offline"} -> 3 results: dev-031, dev-032, dev-033
+```
+
+The agent only states what the tools returned; at most 6 tool calls per question.
 
 ## Testing
 
