@@ -74,6 +74,46 @@ default follows suit; everything inside Docker keeps using 5432.
   so tests can shorten it).
 - All timestamps are UTC, ISO-8601 (`Z` suffix on the wire, `timestamptz` in the DB).
 
+## Milestone 2 — queryable and breakable
+
+### Decisions
+
+**Thin REST layer over the snapshot.** Fleet status and device filtering run in memory on the
+300-row `devices` snapshot (one trivial SELECT); at a much larger fleet these filters would move
+into SQL. Warning/error totals only count *online* devices: the last status of an offline device
+is stale information, and the offline count already covers it.
+
+**One compact window format.** Time windows arrive as `30s | 15m | 24h | 7d` (max 7d), parsed in
+one place (`WindowParser`). The agent gets a single convention to learn instead of per-endpoint
+date math.
+
+**Errors endpoint returns count + latest.** An `error_burst` device emits an ERROR every
+interval, thousands per day; returning the full list would flood the agent's context. The
+response carries the total count in the window plus the 50 most recent events.
+
+**Anomaly thresholds live in Java, data shaping in SQL.** Each rule's SQL returns per-device
+aggregates (battery at window edges via TimescaleDB `first()`/`last()`, hottest reading, worst
+GPS jump) and the threshold comparison happens in plain Java where it is unit-testable with a
+fixed clock. The one exception is the GPS speed cut-off, applied in SQL because consecutive-point
+pairs are far too many to pull into memory — a deliberate, documented trade-off.
+
+**Battery rule is direction-aware.** Drop = battery at window start − battery at window end, so
+a device that *charged* 25 points is not flagged. A V-shape (fast drop then recharge) inside the
+hour can slip through; accepted as part of "deliberately simple".
+
+**GPS distance is an equirectangular approximation.** Exact haversine is unnecessary: normal
+movement implies tens of km/h, the threshold is 200, and faults imply thousands — the
+approximation error is irrelevant at city scale.
+
+**One finding per device per rule.** A drifting device produces a jump on every tick; reporting
+only the worst keeps `/api/anomalies` compact enough for the agent to reason over.
+
+**Faults are simulator-side state.** A fault changes how the device behaves from the next tick
+(`silent` skips publishing, `battery_drain` multiplies the drain rate and blocks charging,
+`gps_drift` jumps kilometres per tick, `error_burst` forces status ERROR with a stable error
+code). `clear` was added beyond the spec so demos can also show recovery. Control messages are
+validated and logged; invalid ones are ignored, never fatal.
+
 ### Measured (informal, M1)
 
 Local run, 300 devices, 5 s interval: sustained ~60 msg/s ingestion; telemetry grew
