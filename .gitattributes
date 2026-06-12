@@ -1,0 +1,11 @@
+# Normalize text files across platforms.
+* text=auto
+
+# Scripts that run inside Linux containers must keep LF endings,
+# or the shebang line breaks (the classic "./mvnw: not found").
+mvnw text eol=lf
+*.sh text eol=lf
+
+# Windows scripts keep CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
