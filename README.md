@@ -15,7 +15,7 @@ as its toolbox.
 | M1 | Data flows: simulator → MQTT → ingestion → TimescaleDB | ✅ done |
 | M2 | Fleet REST API, fault injection, anomaly rules | ✅ done |
 | M3 | First agent (terminal) with tool calling | ✅ done |
-| M4 | Full product: FastAPI agent, React chat UI, one-command compose | — |
+| M4 | Full product: FastAPI agent, React chat UI, one-command compose | ✅ done |
 | M5 | CI, integration tests, README polish, measured numbers | — |
 
 ## Architecture
@@ -43,23 +43,18 @@ as its toolbox.
 
 See [docs/architecture.md](docs/architecture.md) for design notes.
 
-## Quickstart (milestone 1)
+## Quickstart
 
-Requires Docker, Java 21 and Python 3.12.
+Requires Docker only.
 
 ```bash
-# 1. broker + database
-docker compose up -d
-
-# 2. ingestion platform (separate terminal)
-cd platform && ./mvnw spring-boot:run
-
-# 3. simulated fleet: 300 devices, one message each every 5 s (separate terminal)
-cd simulator
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e .
-fleet-simulator
+cp .env.example .env        # then set GEMINI_API_KEY inside .env
+docker compose up --build
 ```
+
+Open **http://localhost:5173**, inject a fault (see below) and ask the agent about it.
+The full fleet runs in containers: simulator (300 devices) → Mosquitto → platform → TimescaleDB,
+with the agent on :8000 and the chat UI on :5173.
 
 Watch the data arrive:
 
@@ -123,22 +118,10 @@ Demo tip: run the platform with `OFFLINE_THRESHOLD=40s` and a silenced device ap
 
 ## Asking the agent
 
-The agent (Gemini with function calling) investigates the fleet by calling the REST API as
-tools — `get_fleet_status`, `list_devices`, `detect_anomalies` — then answers with evidence.
-
-```bash
-cd agent
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e .
-
-# one-off question (reads GEMINI_API_KEY from the repo .env)
-fleet-agent "Which devices are offline right now?"
-
-# or an interactive session
-fleet-agent
-```
-
-Every answer ends with the tool trace — what the agent looked at:
+The agent (Gemini with function calling) investigates by calling the REST API as tools —
+`get_fleet_status`, `list_devices`, `get_device`, `get_device_history`, `get_device_errors`,
+`detect_anomalies` — then answers with evidence. At most 6 tool calls per question, and every
+answer carries the tool trace (the chat UI shows it as a collapsible "how I investigated" panel):
 
 ```
 how I investigated (2 tool calls):
@@ -146,7 +129,28 @@ how I investigated (2 tool calls):
   2. list_devices {"status":"offline"} -> 3 results: dev-031, dev-032, dev-033
 ```
 
-The agent only states what the tools returned; at most 6 tool calls per question.
+Besides the UI, the agent is also available as:
+
+```bash
+# HTTP API
+curl -X POST localhost:8000/ask -H "Content-Type: application/json" \
+  -d '{"question":"Which devices are offline right now?"}'
+
+# terminal CLI (from agent/, after pip install -e .)
+fleet-agent "Which devices are offline right now?"
+```
+
+## Development mode (services on the host)
+
+Run only the infrastructure in Docker and the services you are working on locally:
+
+```bash
+docker compose up -d mosquitto postgres
+cd platform && ./mvnw spring-boot:run                  # API on :8080
+cd simulator && pip install -e . && fleet-simulator    # in its own venv
+cd agent && pip install -e . && fleet-agent            # in its own venv
+cd ui && npm install && npm run dev                    # UI on :5173
+```
 
 ## Testing
 

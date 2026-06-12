@@ -141,6 +141,34 @@ when data is insufficient ("answer only from tool data; say so if it is not enou
 the CLI prints it under the answer and the M4 chat UI will render it as the "how I investigated"
 panel. Summaries are deliberately compact (counts + first ids) to stay readable.
 
+## Milestone 4 — full product
+
+### Decisions
+
+**Compose topology.** Healthchecks live on the stateful infrastructure (postgres, mosquitto) and
+the platform waits for both to be healthy, per spec. The agent and UI only need start ordering:
+the agent's tool layer already treats an unreachable platform as data (`{"error": ...}`), and the
+UI shows a clear error bubble if the agent is down. Inside the network services talk via service
+names (`postgres:5432`, `mosquitto:1883`, `platform:8080`); only the browser-facing ports are
+published.
+
+**FastAPI app factory.** The agent runs as `uvicorn agent.main:create_app --factory`: the Gemini
+provider is built at startup, so a missing `GEMINI_API_KEY` fails fast with one clear log line
+instead of failing on the first question — and tests inject a stub loop through the same factory.
+
+**Wire contract straight from the spec.** `POST /ask` returns `{answer, toolTrace:[{tool, args,
+resultSummary}]}` (camelCase on the wire); the UI types mirror it 1:1. CORS is wide open because
+the project is local-only by design (non-goal: no auth).
+
+**UI as static files behind nginx.** Multi-stage build: node compiles, nginx serves ~60 kB of
+assets. The agent URL is baked at build time (`VITE_AGENT_URL`, default `http://localhost:8000`)
+— correct for compose because the *browser*, not the container, calls the agent through the
+published port.
+
+**Token hygiene on history.** `get_device_history` defaults to 20 readings (hard cap 200) even
+though the API allows 1000: recent points answer diagnostic questions, and the agent's context
+stays small.
+
 ### Measured (informal, M1)
 
 Local run, 300 devices, 5 s interval: sustained ~60 msg/s ingestion; telemetry grew
