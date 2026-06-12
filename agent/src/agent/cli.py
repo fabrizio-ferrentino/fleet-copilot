@@ -11,9 +11,7 @@ from dotenv import find_dotenv, load_dotenv
 
 from agent.llm import DEFAULT_MODEL, GeminiProvider, MissingApiKeyError
 from agent.loop import AgentAnswer, AgentLoop
-from agent.tools import PlatformTools
-
-DEFAULT_PLATFORM_URL = "http://localhost:8080"
+from agent.tools import DEFAULT_PLATFORM_URL, PlatformTools
 
 
 def parse_args() -> argparse.Namespace:

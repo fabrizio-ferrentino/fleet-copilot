@@ -17,6 +17,9 @@ from agent.llm import ToolSpec
 REQUEST_TIMEOUT_S = 10.0
 SUMMARY_MAX_CHARS = 160
 SUMMARY_MAX_IDS = 5
+DEFAULT_PLATFORM_URL = "http://localhost:8080"
+HISTORY_DEFAULT_LIMIT = 20
+HISTORY_MAX_LIMIT = 200
 
 SPECS: list[ToolSpec] = [
     ToolSpec(
@@ -65,6 +68,59 @@ SPECS: list[ToolSpec] = [
             },
         },
     ),
+    ToolSpec(
+        name="get_device",
+        description=(
+            "Current state of one device: online flag, lastSeen, status, battery, position, "
+            "firmware."
+        ),
+        parameters={
+            "type": "OBJECT",
+            "properties": {
+                "deviceId": {"type": "STRING", "description": "Device id, e.g. dev-042."}
+            },
+            "required": ["deviceId"],
+        },
+    ),
+    ToolSpec(
+        name="get_device_history",
+        description=(
+            "Recent telemetry readings of one device, newest first: ts, lat, lon, batteryPct, "
+            "temperatureC, status, errorCode. Use it to see how a device behaved over time."
+        ),
+        parameters={
+            "type": "OBJECT",
+            "properties": {
+                "deviceId": {"type": "STRING", "description": "Device id, e.g. dev-042."},
+                "limit": {
+                    "type": "INTEGER",
+                    "description": (
+                        f"How many readings (default {HISTORY_DEFAULT_LIMIT}, "
+                        f"max {HISTORY_MAX_LIMIT})."
+                    ),
+                },
+            },
+            "required": ["deviceId"],
+        },
+    ),
+    ToolSpec(
+        name="get_device_errors",
+        description=(
+            "ERROR events reported by one device within a window: total count plus the most "
+            "recent occurrences with their error codes."
+        ),
+        parameters={
+            "type": "OBJECT",
+            "properties": {
+                "deviceId": {"type": "STRING", "description": "Device id, e.g. dev-042."},
+                "window": {
+                    "type": "STRING",
+                    "description": "Lookback window like 15m, 1h, 24h, 7d; default 24h.",
+                },
+            },
+            "required": ["deviceId"],
+        },
+    ),
 ]
 
 
@@ -87,6 +143,18 @@ class PlatformTools:
                 return self._get("/api/devices", params)
             case "detect_anomalies":
                 return self._get("/api/anomalies", {"window": args.get("window", "24h")})
+            case "get_device":
+                return self._get(f"/api/devices/{args.get('deviceId', '')}")
+            case "get_device_history":
+                limit = min(int(args.get("limit", HISTORY_DEFAULT_LIMIT)), HISTORY_MAX_LIMIT)
+                return self._get(
+                    f"/api/devices/{args.get('deviceId', '')}/telemetry", {"limit": limit}
+                )
+            case "get_device_errors":
+                return self._get(
+                    f"/api/devices/{args.get('deviceId', '')}/errors",
+                    {"window": args.get("window", "24h")},
+                )
             case _:
                 return {"error": f"unknown tool '{name}'"}
 
