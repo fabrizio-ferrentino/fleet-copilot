@@ -6,6 +6,8 @@ import math
 import random
 from datetime import UTC, datetime
 
+from simulator import faults
+
 # Fleet starting area (Campania, Italy); devices spread around this point.
 BASE_LAT = 40.78
 BASE_LON = 14.59
@@ -42,6 +44,8 @@ class Device:
         self.lon = BASE_LON + rng.uniform(-START_SPREAD_DEG, START_SPREAD_DEG)
         self.battery_pct = rng.uniform(35.0, 100.0)
         self.firmware = rng.choice(FIRMWARE_VERSIONS)
+        self.fault: str | None = None
+        self._error_code: str | None = None
         self._heading_deg = rng.uniform(0.0, 360.0)
         self._speed_kmh = rng.uniform(*SPEED_KMH)
         self._charging = False
@@ -50,12 +54,29 @@ class Device:
         self._charge_pct_per_s = rng.uniform(*CHARGE_PCT_PER_S)
         self._temp_baseline_c = rng.uniform(*TEMP_BASELINE_C)
 
-    def tick(self, elapsed_s: float) -> dict:
-        """Advance the state by ``elapsed_s`` seconds and build the telemetry payload."""
+    def set_fault(self, fault: str | None) -> None:
+        """Apply a fault (or clear it with None); effects show up from the next tick."""
+        self.fault = fault
+        self._error_code = (
+            self._rng.choice(faults.ERROR_CODES) if fault == faults.ERROR_BURST else None
+        )
+
+    def tick(self, elapsed_s: float) -> dict | None:
+        """Advance the state by ``elapsed_s`` seconds and build the telemetry payload.
+
+        Returns None when the device is silenced by a fault (nothing to publish).
+        """
+        if self.fault == faults.SILENT:
+            return None
         self._move(elapsed_s)
         self._update_battery(elapsed_s)
         temperature_c = self._temp_baseline_c + self._rng.gauss(0.0, TEMP_NOISE_C)
-        status = "WARNING" if self.battery_pct < LOW_BATTERY_WARNING_PCT else "OK"
+        if self.fault == faults.ERROR_BURST:
+            status, error_code = "ERROR", self._error_code
+        elif self.battery_pct < LOW_BATTERY_WARNING_PCT:
+            status, error_code = "WARNING", None
+        else:
+            status, error_code = "OK", None
         return {
             "deviceId": self.device_id,
             "ts": _iso_utc_now(),
@@ -64,12 +85,19 @@ class Device:
             "batteryPct": round(self.battery_pct, 1),
             "temperatureC": round(temperature_c, 1),
             "status": status,
-            "errorCode": None,
+            "errorCode": error_code,
             "firmware": self.firmware,
         }
 
     def _move(self, elapsed_s: float) -> None:
         """Slow random walk: keep a heading, jitter it a little, advance at vehicle speed."""
+        if self.fault == faults.GPS_DRIFT:
+            # Unrealistic jump: kilometres per tick, far beyond any plausible speed.
+            self.lat += self._rng.choice((-1.0, 1.0)) * self._rng.uniform(*faults.DRIFT_JUMP_DEG)
+            self.lon += self._rng.choice((-1.0, 1.0)) * self._rng.uniform(*faults.DRIFT_JUMP_DEG)
+            self.lat = max(-85.0, min(85.0, self.lat))
+            self.lon = (self.lon + 180.0) % 360.0 - 180.0
+            return
         self._heading_deg = (self._heading_deg + self._rng.gauss(0.0, HEADING_JITTER_DEG)) % 360.0
         distance_km = self._speed_kmh * elapsed_s / 3600.0
         heading_rad = math.radians(self._heading_deg)
@@ -83,6 +111,12 @@ class Device:
         self.lon = (self.lon + 180.0) % 360.0 - 180.0
 
     def _update_battery(self, elapsed_s: float) -> None:
+        if self.fault == faults.BATTERY_DRAIN:
+            # Abnormally fast drain; charging never kicks in while the fault is active.
+            self._charging = False
+            drain = self._drain_pct_per_s * faults.DRAIN_MULTIPLIER * elapsed_s
+            self.battery_pct = max(0.0, self.battery_pct - drain)
+            return
         if self._charging:
             self.battery_pct = min(100.0, self.battery_pct + self._charge_pct_per_s * elapsed_s)
             if self.battery_pct >= 100.0:
