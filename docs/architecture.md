@@ -169,8 +169,33 @@ published port.
 though the API allows 1000: recent points answer diagnostic questions, and the agent's context
 stays small.
 
-### Measured (informal, M1)
+## Milestone 5 — make it look engineered
 
-Local run, 300 devices, 5 s interval: sustained ~60 msg/s ingestion; telemetry grew
-1,985 → 3,507 rows in a ~25 s window while 4 malformed messages were rejected and logged.
-The formal measurement methodology lands in M5.
+### Decisions
+
+**Testcontainers over an embedded/mocked DB.** The integration tests run the *real*
+TimescaleDB and Mosquitto images, so they exercise the actual Flyway migration (hypertable
+included), the Paho subscriber and the JDBC writes — the parts most likely to break in
+production. The PostgreSQL container uses the TimescaleDB image via
+`asCompatibleSubstituteFor("postgres")`; Ryuk is disabled in constrained sandboxes via
+`TESTCONTAINERS_RYUK_DISABLED`.
+
+**Golden tests need a live LLM, so they skip without a key.** Verifying that "which devices are
+offline?" makes the model call `list_devices(status=offline)` is only meaningful against a real
+model, which is non-deterministic and needs a secret. The golden tests therefore mock the tool
+layer (real tool *specs*, canned results) and `skipif` when `GEMINI_API_KEY` is absent; the
+deterministic loop/tool/API unit tests are what keep CI green. Adding the key as a CI secret
+later turns the golden tests on without code changes.
+
+**CI fans out per component.** Separate jobs (platform, agent, simulator lint, ui build) give
+fast, independent signal and a clear failure surface, rather than one monolithic job.
+
+### Measured
+
+**Sustained ingestion ≈ 500 msg/s** (single platform instance, one transaction per message).
+Measured by running broker + database in Docker and the platform locally, pointing the simulator
+at a target publish rate, warming up 15 s, then counting `telemetry` rows over a fixed 30 s
+window. At 500 msg/s the platform kept pace (≈499 msg/s ingested, 0 failed publishes); at
+1000 msg/s it sustained ≈490 msg/s — the single-consumer + per-message-transaction design tops
+out near 500 msg/s on this hardware. Lifting it (batched inserts, multiple consumers) is future
+work.

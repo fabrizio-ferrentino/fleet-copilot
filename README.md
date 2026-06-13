@@ -1,5 +1,7 @@
 # Fleet Copilot
 
+[![CI](https://github.com/fabrizio-ferrentino/fleet-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/fabrizio-ferrentino/fleet-copilot/actions/workflows/ci.yml)
+
 An AI agent that troubleshoots a simulated IoT fleet in natural language. Ask *"which devices
 have been offline since yesterday?"* or *"why did device 42 stop transmitting?"* and the agent
 investigates by calling real APIs over real data, then answers with evidence.
@@ -7,6 +9,16 @@ investigates by calling real APIs over real data, then answers with evidence.
 Under the hood: a Python simulator drives 300 devices over MQTT, a Spring Boot platform ingests
 telemetry into TimescaleDB and exposes a fleet REST API, and an LLM-powered agent uses that API
 as its toolbox.
+
+![Fleet Copilot demo](docs/demo.gif)
+
+### Example questions
+
+- *Which devices are offline right now?*
+- *Is anything anomalous in the last hour?*
+- *Why did dev-042 stop transmitting?*
+- *How many devices are online versus in error?*
+- *Show me the recent error events for dev-007.*
 
 ## Project status
 
@@ -16,7 +28,7 @@ as its toolbox.
 | M2 | Fleet REST API, fault injection, anomaly rules | ✅ done |
 | M3 | First agent (terminal) with tool calling | ✅ done |
 | M4 | Full product: FastAPI agent, React chat UI, one-command compose | ✅ done |
-| M5 | CI, integration tests, README polish, measured numbers | — |
+| M5 | CI, integration tests, README polish, measured numbers | ✅ done |
 
 ## Architecture
 
@@ -152,14 +164,76 @@ cd agent && pip install -e . && fleet-agent            # in its own venv
 cd ui && npm install && npm run dev                    # UI on :5173
 ```
 
+## Design decisions
+
+The reasoning behind each choice lives in [docs/architecture.md](docs/architecture.md); the four
+that matter most:
+
+- **Why TimescaleDB (a hypertable) for telemetry.** Telemetry is append-only and every query is
+  time-bounded ("last hour of dev-042", "errors in 24h"). A hypertable transparently partitions
+  rows into time chunks, so those queries touch only recent chunks instead of one ever-growing
+  table — and `first()`/`last()` make the battery-window rule a single scan. At ~500 msg/s a plain
+  table's indexes would degrade within days. The device *snapshot* lives in a plain 300-row table
+  because fleet-status questions never need history.
+- **Why rule-based anomalies, not ML.** The four faults have crisp physical definitions (silent >
+  threshold, battery drop > 20 pts/h, implied speed > 200 km/h, temp > 70 °C). Thresholds are
+  explainable, unit-testable with a fixed clock, need no training data, and produce the exact
+  evidence the agent cites. ML would add opacity and a data pipeline for zero benefit here.
+- **Why the agent calls REST tools instead of querying the DB.** The API is the same validated,
+  compact contract a human operator uses: the platform keeps owning query shaping and safety, the
+  agent gets no SQL surface to misuse or leak, and every investigation step is a meaningful HTTP
+  call we can show as a trace. It also keeps the agent decoupled from the schema.
+- **Why max 6 tool calls.** Bounds cost and latency and forces decisive investigation. The cap is
+  enforced in the loop, not trusted to the model: past 6, calls get an `{"error":"budget"}` payload
+  that pushes the model to answer from what it has; a separate round cap stops a runaway model.
+
+## Measured numbers
+
+**Sustained ingestion ≈ 500 messages/second** (single platform instance, one transaction per
+message), on the dev machine used during development.
+
+*How it was measured:* run `mosquitto` + `postgres` in Docker and the platform locally, point the
+simulator at the broker at a target rate, let it warm up 15 s, then count `telemetry` rows over a
+fixed 30 s window:
+
+```bash
+docker compose up -d mosquitto postgres
+cd platform && ./mvnw spring-boot:run            # in another terminal
+cd simulator && fleet-simulator --devices 500 --interval 1   # ~500 msg/s, another terminal
+# count, wait 30s, count again:
+docker exec fleet-postgres psql -U fleet -d fleet -tAc "SELECT count(*) FROM telemetry"
+```
+
+At a 500 msg/s publish rate the platform kept pace (≈499 msg/s ingested, 0 failed publishes); at
+1000 msg/s it sustained ≈490 msg/s, i.e. the single-consumer + per-message-transaction design
+tops out around 500 msg/s here. The bottleneck and how to lift it (batching, multiple consumers)
+are noted under future work.
+
 ## Testing
 
 ```bash
-cd platform && ./mvnw verify   # unit tests + spotless formatting check
+cd platform && ./mvnw verify   # JUnit unit tests + Testcontainers integration tests + Spotless
+cd agent && pip install -e ".[dev]" && pytest   # loop, tools, /ask contract; golden tests too
+cd ui && npm ci && npm run build                # typecheck + production build
 ```
+
+- **Platform unit tests** cover the payload parser, the four anomaly rules (fixed-clock) and the
+  device read model.
+- **Testcontainers integration tests** spin up real PostgreSQL/TimescaleDB and Mosquitto, publish
+  over MQTT and assert the reading lands in the DB, a malformed message is skipped without
+  crashing ingestion, and a silenced device surfaces as a `SILENT` anomaly.
+- **Agent tests** check the loop mechanics (6-call budget, error-as-data) and the `/ask` contract
+  with a fake provider; the **golden tests** drive the real LLM with a mocked tool layer to assert
+  each question triggers the right tool, and skip automatically when `GEMINI_API_KEY` is absent so
+  CI stays green without a secret.
+- **CI** (GitHub Actions) runs all of the above on every push and pull request.
 
 ## Future work / non-goals
 
 By design (see the project spec): no auth, no multi-tenancy, no Kubernetes, no Kafka, no real
-hardware, no ML, no RAG, single LLM provider only. Production hardening such as idempotent
-ingestion and dead-letter handling for bad messages is documented as future work.
+hardware, no ML, no RAG, single LLM provider only.
+
+Production hardening worth doing next: **idempotent ingestion** (dedupe on `(device_id, ts)` to
+absorb MQTT QoS-1 redeliveries), **dead-letter handling** for malformed messages instead of
+log-and-drop, **batched/multi-consumer ingestion** to push past ~500 msg/s, and
+**observability** (metrics, tracing) on the ingestion path.
