@@ -74,6 +74,101 @@ default follows suit; everything inside Docker keeps using 5432.
   so tests can shorten it).
 - All timestamps are UTC, ISO-8601 (`Z` suffix on the wire, `timestamptz` in the DB).
 
+## Milestone 2 — queryable and breakable
+
+### Decisions
+
+**Thin REST layer over the snapshot.** Fleet status and device filtering run in memory on the
+300-row `devices` snapshot (one trivial SELECT); at a much larger fleet these filters would move
+into SQL. Warning/error totals only count *online* devices: the last status of an offline device
+is stale information, and the offline count already covers it.
+
+**One compact window format.** Time windows arrive as `30s | 15m | 24h | 7d` (max 7d), parsed in
+one place (`WindowParser`). The agent gets a single convention to learn instead of per-endpoint
+date math.
+
+**Errors endpoint returns count + latest.** An `error_burst` device emits an ERROR every
+interval, thousands per day; returning the full list would flood the agent's context. The
+response carries the total count in the window plus the 50 most recent events.
+
+**Anomaly thresholds live in Java, data shaping in SQL.** Each rule's SQL returns per-device
+aggregates (battery at window edges via TimescaleDB `first()`/`last()`, hottest reading, worst
+GPS jump) and the threshold comparison happens in plain Java where it is unit-testable with a
+fixed clock. The one exception is the GPS speed cut-off, applied in SQL because consecutive-point
+pairs are far too many to pull into memory — a deliberate, documented trade-off.
+
+**Battery rule is direction-aware.** Drop = battery at window start − battery at window end, so
+a device that *charged* 25 points is not flagged. A V-shape (fast drop then recharge) inside the
+hour can slip through; accepted as part of "deliberately simple".
+
+**GPS distance is an equirectangular approximation.** Exact haversine is unnecessary: normal
+movement implies tens of km/h, the threshold is 200, and faults imply thousands — the
+approximation error is irrelevant at city scale.
+
+**One finding per device per rule.** A drifting device produces a jump on every tick; reporting
+only the worst keeps `/api/anomalies` compact enough for the agent to reason over.
+
+**Faults are simulator-side state.** A fault changes how the device behaves from the next tick
+(`silent` skips publishing, `battery_drain` multiplies the drain rate and blocks charging,
+`gps_drift` jumps kilometres per tick, `error_burst` forces status ERROR with a stable error
+code). `clear` was added beyond the spec so demos can also show recovery. Control messages are
+validated and logged; invalid ones are ignored, never fatal.
+
+## Milestone 3 — first intelligence
+
+### Decisions
+
+**The agent calls REST tools, never the database.** The API is the same operator-grade contract
+a human would use: stable, validated, compact. The platform keeps owning query shaping and
+optimization, the agent gets no SQL surface to misuse, and every step of the investigation is a
+meaningful HTTP call that can be shown to the user as a trace.
+
+**Provider behind a one-class interface.** `loop.py` only sees neutral types (`ToolSpec`,
+`LlmTurn`, `Conversation`); Gemini lives in one class in `llm.py`. Swapping providers means
+writing one new class — but per the non-goals only Gemini is implemented.
+
+**Max 6 tool calls per question.** Bounds cost and latency, and forces the model to investigate
+decisively instead of wandering. The budget is enforced in the loop, not trusted to the model:
+past 6, requested calls receive an `{"error": "budget exhausted"}` payload, which pushes the
+model to conclude from what it already has. A separate round cap protects against a model that
+never stops calling tools.
+
+**Failures are data, not exceptions.** A dead platform or a 4xx becomes `{"error": ...}` in the
+tool result, so the model can say "I could not check X" — exactly what the system prompt demands
+when data is insufficient ("answer only from tool data; say so if it is not enough").
+
+**The trace is a first-class output.** Every call is recorded as `{tool, args, resultSummary}`;
+the CLI prints it under the answer and the M4 chat UI will render it as the "how I investigated"
+panel. Summaries are deliberately compact (counts + first ids) to stay readable.
+
+## Milestone 4 — full product
+
+### Decisions
+
+**Compose topology.** Healthchecks live on the stateful infrastructure (postgres, mosquitto) and
+the platform waits for both to be healthy, per spec. The agent and UI only need start ordering:
+the agent's tool layer already treats an unreachable platform as data (`{"error": ...}`), and the
+UI shows a clear error bubble if the agent is down. Inside the network services talk via service
+names (`postgres:5432`, `mosquitto:1883`, `platform:8080`); only the browser-facing ports are
+published.
+
+**FastAPI app factory.** The agent runs as `uvicorn agent.main:create_app --factory`: the Gemini
+provider is built at startup, so a missing `GEMINI_API_KEY` fails fast with one clear log line
+instead of failing on the first question — and tests inject a stub loop through the same factory.
+
+**Wire contract straight from the spec.** `POST /ask` returns `{answer, toolTrace:[{tool, args,
+resultSummary}]}` (camelCase on the wire); the UI types mirror it 1:1. CORS is wide open because
+the project is local-only by design (non-goal: no auth).
+
+**UI as static files behind nginx.** Multi-stage build: node compiles, nginx serves ~60 kB of
+assets. The agent URL is baked at build time (`VITE_AGENT_URL`, default `http://localhost:8000`)
+— correct for compose because the *browser*, not the container, calls the agent through the
+published port.
+
+**Token hygiene on history.** `get_device_history` defaults to 20 readings (hard cap 200) even
+though the API allows 1000: recent points answer diagnostic questions, and the agent's context
+stays small.
+
 ### Measured (informal, M1)
 
 Local run, 300 devices, 5 s interval: sustained ~60 msg/s ingestion; telemetry grew
