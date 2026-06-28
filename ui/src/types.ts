@@ -9,6 +9,18 @@ export interface AskResponse {
   toolTrace: TraceEntry[]
 }
 
+export interface Device {
+  id: string
+  online: boolean
+  firstSeen: string
+  lastSeen: string
+  status: 'OK' | 'WARNING' | 'ERROR'
+  batteryPct: number | null
+  lat: number | null
+  lon: number | null
+  firmware: string | null
+}
+
 export interface Message {
   role: 'user' | 'agent'
   text: string
