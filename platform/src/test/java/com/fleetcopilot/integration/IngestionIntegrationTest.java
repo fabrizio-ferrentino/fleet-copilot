@@ -7,6 +7,7 @@ import com.fleetcopilot.anomaly.AnomalyRule;
 import com.fleetcopilot.anomaly.AnomalyService;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.concurrent.TimeUnit;
 import org.eclipse.paho.client.mqttv3.MqttClient;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
@@ -125,6 +126,79 @@ class IngestionIntegrationTest {
     } finally {
       client.disconnect();
     }
+  }
+
+  private void insertBattery(String deviceId, Instant ts, double batteryPct) {
+    jdbc.update(
+        "INSERT INTO telemetry (device_id, ts, battery_pct, status) VALUES (?, ?, ?, 'OK')",
+        deviceId,
+        ts.atOffset(ZoneOffset.UTC),
+        batteryPct);
+  }
+
+  private boolean hasBatteryDrop(String deviceId) {
+    return anomalyService.detect(Duration.ofHours(1)).stream()
+        .anyMatch(f -> f.deviceId().equals(deviceId) && f.rule() == AnomalyRule.BATTERY_DROP);
+  }
+
+  @Test
+  void batteryDropAcrossADataGapIsNotFlagged() {
+    Instant now = Instant.now();
+    // One high reading before a restart, then a steady low run after it (battery re-initialised).
+    insertBattery("dev-gap", now.minus(Duration.ofMinutes(50)), 95.0);
+    for (int i = 6; i >= 0; i--) {
+      insertBattery("dev-gap", now.minus(Duration.ofSeconds(i * 30L)), 60.0);
+    }
+
+    // Naive first-vs-last would be 95 -> 60 (a 35-point "drop"); the gap must suppress it.
+    assertThat(hasBatteryDrop("dev-gap")).isFalse();
+  }
+
+  @Test
+  void sustainedBatteryDropWithinContinuousDataIsFlagged() {
+    Instant now = Instant.now();
+    // Continuous decline 95% -> 60% over ~50 min, readings every 50s (no gap above the threshold).
+    double battery = 95.0;
+    for (int i = 60; i >= 0; i--) {
+      insertBattery("dev-decline", now.minus(Duration.ofSeconds(i * 50L)), battery);
+      battery -= 35.0 / 60.0;
+    }
+
+    assertThat(hasBatteryDrop("dev-decline")).isTrue();
+  }
+
+  private void insertPosition(String deviceId, Instant ts, double lat, double lon) {
+    jdbc.update(
+        "INSERT INTO telemetry (device_id, ts, lat, lon, status) VALUES (?, ?, ?, ?, 'OK')",
+        deviceId,
+        ts.atOffset(ZoneOffset.UTC),
+        lat,
+        lon);
+  }
+
+  private boolean hasGpsJump(String deviceId) {
+    return anomalyService.detect(Duration.ofHours(1)).stream()
+        .anyMatch(f -> f.deviceId().equals(deviceId) && f.rule() == AnomalyRule.GPS_JUMP);
+  }
+
+  @Test
+  void gpsJumpAcrossADataGapIsNotFlagged() {
+    Instant now = Instant.now();
+    // ~70 km apart but 90 s apart (a restart re-spawn). Naive speed ~2800 km/h; the gap must drop it.
+    insertPosition("dev-gps-gap", now.minus(Duration.ofSeconds(90)), 40.78, 14.59);
+    insertPosition("dev-gps-gap", now, 41.30, 15.10);
+
+    assertThat(hasGpsJump("dev-gps-gap")).isFalse();
+  }
+
+  @Test
+  void fastGpsJumpWithinContinuousDataIsFlagged() {
+    Instant now = Instant.now();
+    // Same ~70 km jump but only 5 s apart -> a genuine, physically impossible drift.
+    insertPosition("dev-gps-fast", now.minus(Duration.ofSeconds(5)), 40.78, 14.59);
+    insertPosition("dev-gps-fast", now, 41.30, 15.10);
+
+    assertThat(hasGpsJump("dev-gps-fast")).isTrue();
   }
 
   @Test

@@ -1,10 +1,10 @@
 import type { TraceEntry } from '../types'
 
 /** Collapsible "how I investigated" panel: the agent's tool calls, in order. */
-export default function ToolTrace({ trace }: { trace: TraceEntry[] }) {
+export default function ToolTrace({ trace, open }: { trace: TraceEntry[]; open?: boolean }) {
   if (trace.length === 0) return null
   return (
-    <details className="mt-3 rounded-lg border border-slate-700 bg-slate-900/60">
+    <details open={open} className="mt-3 rounded-lg border border-slate-700 bg-slate-900/60">
       <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-slate-400 hover:text-slate-200">
         how I investigated ({trace.length} tool call{trace.length === 1 ? '' : 's'})
       </summary>

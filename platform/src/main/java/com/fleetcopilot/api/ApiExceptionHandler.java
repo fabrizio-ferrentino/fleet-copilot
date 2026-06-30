@@ -25,6 +25,12 @@ class ApiExceptionHandler {
     return new ApiError(e.getMessage());
   }
 
+  @ExceptionHandler(IllegalStateException.class)
+  @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+  ApiError unavailable(IllegalStateException e) {
+    return new ApiError(e.getMessage());
+  }
+
   @ExceptionHandler(MethodArgumentTypeMismatchException.class)
   @ResponseStatus(HttpStatus.BAD_REQUEST)
   ApiError typeMismatch(MethodArgumentTypeMismatchException e) {

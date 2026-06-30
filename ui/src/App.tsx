@@ -1,4 +1,5 @@
 import Chat from './components/Chat'
+import FaultControls from './components/FaultControls'
 import FleetMap from './components/FleetMap'
 
 const AGENT_URL = import.meta.env.VITE_AGENT_URL ?? 'http://localhost:8000'
@@ -16,8 +17,11 @@ export default function App() {
         </h1>
       </header>
       <div className="flex min-h-0 flex-1">
-        <div className="w-1/2 border-r border-slate-800">
-          <FleetMap platformUrl={PLATFORM_URL} />
+        <div className="flex w-1/2 flex-col border-r border-slate-800">
+          <FaultControls platformUrl={PLATFORM_URL} />
+          <div className="min-h-0 flex-1">
+            <FleetMap platformUrl={PLATFORM_URL} />
+          </div>
         </div>
         <div className="flex w-1/2 flex-col">
           <Chat agentUrl={AGENT_URL} />

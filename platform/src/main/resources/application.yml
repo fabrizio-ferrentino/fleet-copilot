@@ -16,3 +16,5 @@ fleet:
     uri: tcp://${MQTT_HOST:localhost}:${MQTT_PORT:1883}
     client-id: fleet-platform-ingestion
     topic: fleet/+/telemetry
+    # Topic the simulator listens on for fault-injection commands (UI control panel).
+    control-topic: fleet/control

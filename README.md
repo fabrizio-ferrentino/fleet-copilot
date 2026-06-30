@@ -6,7 +6,7 @@ An AI agent that troubleshoots a simulated IoT fleet in natural language. Ask *"
 have been offline since yesterday?"* or *"why did device 42 stop transmitting?"* and the agent
 investigates by calling real APIs over real data, then answers with evidence.
 
-Under the hood: a Python simulator drives 300 devices over MQTT, a Spring Boot platform ingests
+Under the hood: a Python simulator drives 200+ devices over MQTT, a Spring Boot platform ingests
 telemetry into TimescaleDB and exposes a fleet REST API, and an LLM-powered agent uses that API
 as its toolbox.
 
@@ -141,10 +141,19 @@ how I investigated (2 tool calls):
   2. list_devices {"status":"offline"} -> 3 results: dev-031, dev-032, dev-033
 ```
 
+The chat UI streams the investigation **live** over Server-Sent Events — each tool call shows up
+in the "how I investigated" panel as it happens, then the answer. Provider hiccups (e.g. a Gemini
+rate limit) are retried with backoff and, if they persist, surface as a clean message and a `503`,
+never a raw `500`.
+
 Besides the UI, the agent is also available as:
 
 ```bash
-# HTTP API
+# streaming (SSE): tool calls stream live, then the answer — this is what the chat UI uses
+curl -N -X POST localhost:8000/ask/stream -H "Content-Type: application/json" \
+  -d '{"question":"How many devices are online versus in error?"}'
+
+# non-streaming JSON ({"answer","toolTrace"}) — the stable contract for scripts
 curl -X POST localhost:8000/ask -H "Content-Type: application/json" \
   -d '{"question":"Which devices are offline right now?"}'
 
@@ -222,10 +231,11 @@ cd ui && npm ci && npm run build                # typecheck + production build
 - **Testcontainers integration tests** spin up real PostgreSQL/TimescaleDB and Mosquitto, publish
   over MQTT and assert the reading lands in the DB, a malformed message is skipped without
   crashing ingestion, and a silenced device surfaces as a `SILENT` anomaly.
-- **Agent tests** check the loop mechanics (6-call budget, error-as-data) and the `/ask` contract
-  with a fake provider; the **golden tests** drive the real LLM with a mocked tool layer to assert
-  each question triggers the right tool, and skip automatically when `GEMINI_API_KEY` is absent so
-  CI stays green without a secret.
+- **Agent tests** check the loop mechanics (6-call budget, error-as-data), the `/ask` contract and
+  the `/ask/stream` SSE events with a fake provider, plus provider error mapping (a Gemini
+  rate limit becomes a retried, then graceful, `LlmError`); the **golden tests** drive the real LLM
+  with a mocked tool layer to assert each question triggers the right tool, and skip automatically
+  when `GEMINI_API_KEY` is absent so CI stays green without a secret.
 - **CI** (GitHub Actions) runs all of the above on every push and pull request.
 
 ## Future work / non-goals
