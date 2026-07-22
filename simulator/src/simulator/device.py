@@ -8,10 +8,28 @@ from datetime import UTC, datetime
 
 from simulator import faults
 
-# Fleet starting area (Campania, Italy); devices spread around this point.
-BASE_LAT = 40.78
-BASE_LON = 14.59
-START_SPREAD_DEG = 0.5
+# Real Campania towns (lat, lon), all comfortably inland, used as fleet home bases so that
+# devices spawn and roam over the region's towns and roads — not the Tyrrhenian Sea.
+HOME_BASES: tuple[tuple[float, float], ...] = (
+    (41.08, 14.33),  # Caserta
+    (41.03, 14.30),  # Marcianise
+    (40.97, 14.21),  # Aversa
+    (41.10, 14.21),  # Capua
+    (41.03, 14.39),  # Maddaloni
+    (40.95, 14.37),  # Acerra
+    (40.92, 14.31),  # Afragola
+    (40.93, 14.53),  # Nola
+    (40.76, 14.55),  # Palma Campania
+    (41.06, 14.64),  # Montesarchio
+    (41.13, 14.78),  # Benevento
+    (40.91, 14.79),  # Avellino
+    (40.92, 14.84),  # Atripalda
+    (40.81, 14.62),  # Sarno
+    (40.74, 14.64),  # Nocera Inferiore
+    (40.62, 15.05),  # Eboli
+)
+SPAWN_JITTER_DEG = 0.03  # ~3 km scatter around a home base at spawn
+ROAM_RADIUS_DEG = 0.05  # stay within ~5 km of home, so a slow walk never reaches the coast
 
 # Battery rates are per second so behaviour is independent of the publish interval.
 DRAIN_PCT_PER_S = (0.002, 0.006)  # a full battery lasts roughly 5-14 h
@@ -40,8 +58,9 @@ class Device:
     def __init__(self, device_id: str, rng: random.Random) -> None:
         self.device_id = device_id
         self._rng = rng
-        self.lat = BASE_LAT + rng.uniform(-START_SPREAD_DEG, START_SPREAD_DEG)
-        self.lon = BASE_LON + rng.uniform(-START_SPREAD_DEG, START_SPREAD_DEG)
+        self._home_lat, self._home_lon = rng.choice(HOME_BASES)
+        self.lat = self._home_lat + rng.uniform(-SPAWN_JITTER_DEG, SPAWN_JITTER_DEG)
+        self.lon = self._home_lon + rng.uniform(-SPAWN_JITTER_DEG, SPAWN_JITTER_DEG)
         self.battery_pct = rng.uniform(35.0, 100.0)
         self.firmware = rng.choice(FIRMWARE_VERSIONS)
         self.fault: str | None = None
@@ -102,13 +121,31 @@ class Device:
         distance_km = self._speed_kmh * elapsed_s / 3600.0
         heading_rad = math.radians(self._heading_deg)
         self.lat += distance_km * math.cos(heading_rad) / KM_PER_DEG_LAT
-        self.lat = max(-85.0, min(85.0, self.lat))
         self.lon += (
             distance_km
             * math.sin(heading_rad)
             / (KM_PER_DEG_LON_AT_EQUATOR * math.cos(math.radians(self.lat)))
         )
-        self.lon = (self.lon + 180.0) % 360.0 - 180.0
+        self._keep_near_home()
+
+    def _keep_near_home(self) -> None:
+        """Clamp to a small box around the home base and turn back at the edge, so the slow
+        random walk stays on land near its town instead of drifting into the sea."""
+        bounced = False
+        if self.lat > self._home_lat + ROAM_RADIUS_DEG:
+            self.lat = self._home_lat + ROAM_RADIUS_DEG
+            bounced = True
+        elif self.lat < self._home_lat - ROAM_RADIUS_DEG:
+            self.lat = self._home_lat - ROAM_RADIUS_DEG
+            bounced = True
+        if self.lon > self._home_lon + ROAM_RADIUS_DEG:
+            self.lon = self._home_lon + ROAM_RADIUS_DEG
+            bounced = True
+        elif self.lon < self._home_lon - ROAM_RADIUS_DEG:
+            self.lon = self._home_lon - ROAM_RADIUS_DEG
+            bounced = True
+        if bounced:
+            self._heading_deg = (self._heading_deg + 180.0) % 360.0
 
     def _update_battery(self, elapsed_s: float) -> None:
         if self.fault == faults.BATTERY_DRAIN:
