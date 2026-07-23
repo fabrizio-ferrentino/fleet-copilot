@@ -66,7 +66,9 @@ class MissingApiKeyError(RuntimeError):
 
 
 class LlmError(RuntimeError):
-    """The LLM provider could not answer; carries a user-facing message and whether a retry may help."""
+    """The LLM provider could not answer; carries a user-facing message and
+    whether a retry may help.
+    """
 
     def __init__(self, user_message: str, *, retryable: bool) -> None:
         super().__init__(user_message)

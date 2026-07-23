@@ -184,7 +184,8 @@ class IngestionIntegrationTest {
   @Test
   void gpsJumpAcrossADataGapIsNotFlagged() {
     Instant now = Instant.now();
-    // ~70 km apart but 90 s apart (a restart re-spawn). Naive speed ~2800 km/h; the gap must drop it.
+    // ~70 km apart but 90 s apart (a restart re-spawn). Naive speed ~2800 km/h;
+    // the gap must drop it.
     insertPosition("dev-gps-gap", now.minus(Duration.ofSeconds(90)), 40.78, 14.59);
     insertPosition("dev-gps-gap", now, 41.30, 15.10);
 

@@ -83,8 +83,7 @@ public class MqttControlPublisher {
       throw new IllegalStateException("control channel is not connected to the MQTT broker");
     }
     try {
-      byte[] payload =
-          objectMapper.writeValueAsBytes(Map.of("deviceId", deviceId, "fault", fault));
+      byte[] payload = objectMapper.writeValueAsBytes(Map.of("deviceId", deviceId, "fault", fault));
       MqttMessage message = new MqttMessage(payload);
       message.setQos(QOS);
       client.publish(properties.controlTopic(), message);
