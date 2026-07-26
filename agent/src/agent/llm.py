@@ -8,14 +8,18 @@ Per the project non-goals, Gemini is the only implemented provider.
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 DEFAULT_MODEL = "gemini-2.5-flash"
+
+RETRY_ATTEMPTS = 3
+RETRY_BASE_DELAY_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,47 @@ class MissingApiKeyError(RuntimeError):
     pass
 
 
+class LlmError(RuntimeError):
+    """The LLM provider could not answer; carries a user-facing message and
+    whether a retry may help.
+    """
+
+    def __init__(self, user_message: str, *, retryable: bool) -> None:
+        super().__init__(user_message)
+        self.user_message = user_message
+        self.retryable = retryable
+
+
+def _send_with_retry(call: Callable[[], Any]) -> Any:
+    """Run a provider call, retrying rate limits / transient failures with exponential backoff.
+
+    Any failure is mapped to ``LlmError`` so the agentic loop never propagates a raw
+    provider exception (which would surface as an HTTP 500 / "Failed to fetch").
+    """
+    delay = RETRY_BASE_DELAY_S
+    last_exc: Exception | None = None
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            return call()
+        except errors.ClientError as exc:  # 4xx
+            if getattr(exc, "code", None) != 429:
+                raise LlmError(
+                    "The AI provider rejected the request.", retryable=False
+                ) from exc
+            last_exc = exc  # 429 RESOURCE_EXHAUSTED — worth retrying
+        except errors.ServerError as exc:  # 5xx
+            last_exc = exc
+        except Exception as exc:  # network / unexpected
+            last_exc = exc
+        if attempt < RETRY_ATTEMPTS - 1:
+            time.sleep(delay)
+            delay *= 2
+    raise LlmError(
+        "The AI provider is temporarily unavailable (rate limit or network). Please retry shortly.",
+        retryable=True,
+    ) from last_exc
+
+
 class GeminiProvider:
     """Gemini via the google-genai SDK, manual function calling (no auto-execution)."""
 
@@ -96,14 +141,14 @@ class _GeminiConversation:
         self._chat = chat
 
     def send_user(self, text: str) -> LlmTurn:
-        return _to_turn(self._chat.send_message(text))
+        return _to_turn(_send_with_retry(lambda: self._chat.send_message(text)))
 
     def send_tool_results(self, results: Sequence[ToolResult]) -> LlmTurn:
         parts = [
             types.Part.from_function_response(name=r.name, response={"result": r.payload})
             for r in results
         ]
-        return _to_turn(self._chat.send_message(parts))
+        return _to_turn(_send_with_retry(lambda: self._chat.send_message(parts)))
 
 
 def _to_turn(response: types.GenerateContentResponse) -> LlmTurn:

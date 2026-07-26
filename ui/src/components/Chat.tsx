@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AskResponse, Message } from '../types'
+import type { Message } from '../types'
 import ToolTrace from './ToolTrace'
 
 const SUGGESTIONS = [
@@ -21,27 +21,72 @@ export default function Chat({ agentUrl }: { agentUrl: string }) {
   async function send(question: string) {
     const trimmed = question.trim()
     if (!trimmed || loading) return
-    setMessages((prev) => [...prev, { role: 'user', text: trimmed }])
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', text: trimmed },
+      { role: 'agent', text: '', trace: [], streaming: true },
+    ])
     setInput('')
     setLoading(true)
+
+    // Input is disabled while loading, so the agent placeholder stays last throughout.
+    const updateAgent = (updater: (m: Message) => Message) =>
+      setMessages((prev) => prev.map((m, i) => (i === prev.length - 1 ? updater(m) : m)))
+
+    const handleFrame = (frame: string) => {
+      let event = 'message'
+      let data = ''
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim()
+        else if (line.startsWith('data:')) data += line.slice(5).trim()
+      }
+      if (!data) return
+      const payload = JSON.parse(data)
+      if (event === 'tool') {
+        updateAgent((m) => ({
+          ...m,
+          trace: [
+            ...(m.trace ?? []),
+            { tool: payload.tool, args: payload.args, resultSummary: payload.resultSummary },
+          ],
+        }))
+      } else if (event === 'answer') {
+        updateAgent((m) => ({ ...m, text: payload.text }))
+      } else if (event === 'error') {
+        updateAgent((m) => ({ ...m, text: payload.message, isError: true }))
+      }
+    }
+
     try {
-      const response = await fetch(`${agentUrl}/ask`, {
+      const response = await fetch(`${agentUrl}/ask/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: trimmed }),
       })
-      if (!response.ok) throw new Error(`agent returned ${response.status}`)
-      const body: AskResponse = await response.json()
-      setMessages((prev) => [...prev, { role: 'agent', text: body.answer, trace: body.toolTrace }])
+      if (!response.ok || !response.body) throw new Error(`agent returned ${response.status}`)
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let idx = buffer.indexOf('\n\n')
+        while (idx !== -1) {
+          handleFrame(buffer.slice(0, idx))
+          buffer = buffer.slice(idx + 2)
+          idx = buffer.indexOf('\n\n')
+        }
+      }
+      updateAgent((m) => ({ ...m, streaming: false }))
     } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'agent',
-          text: `Could not reach the agent (${String(error)}). Is it running on ${agentUrl}?`,
-          isError: true,
-        },
-      ])
+      updateAgent((m) => ({
+        ...m,
+        text: `Could not reach the agent (${String(error)}). Is it running on ${agentUrl}?`,
+        isError: true,
+        streaming: false,
+      }))
     } finally {
       setLoading(false)
     }
@@ -77,18 +122,17 @@ export default function Chat({ agentUrl }: { agentUrl: string }) {
                     : 'max-w-[85%] rounded-2xl rounded-bl-sm bg-slate-800 px-4 py-3'
               }
             >
-              <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.text}</p>
-              {message.trace && <ToolTrace trace={message.trace} />}
+              {message.text ? (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.text}</p>
+              ) : message.streaming ? (
+                <p className="text-sm text-slate-400">
+                  investigating<span className="animate-pulse">…</span>
+                </p>
+              ) : null}
+              {message.trace && <ToolTrace trace={message.trace} open={message.streaming} />}
             </div>
           </div>
         ))}
-        {loading && (
-          <div className="flex">
-            <div className="rounded-2xl rounded-bl-sm bg-slate-800 px-4 py-3 text-sm text-slate-400">
-              investigating<span className="animate-pulse">…</span>
-            </div>
-          </div>
-        )}
         <div ref={bottomRef} />
       </div>
       <form

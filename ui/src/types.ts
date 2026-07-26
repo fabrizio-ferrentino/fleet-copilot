@@ -26,4 +26,6 @@ export interface Message {
   text: string
   trace?: TraceEntry[]
   isError?: boolean
+  /** true while the agent's answer is still streaming in over SSE */
+  streaming?: boolean
 }

@@ -8,12 +8,19 @@ import org.springframework.stereotype.Repository;
 
 /**
  * Data access for anomaly detection. Queries return per-device aggregates shaped for the rules;
- * thresholds live in {@link AnomalyService} where they are unit-testable. The one exception is the
- * GPS speed threshold, applied in SQL because consecutive-point pairs are far too many to pull into
- * memory.
+ * thresholds live in {@link AnomalyService} where they are unit-testable. Two thresholds live in
+ * SQL instead: the GPS speed threshold (consecutive-point pairs are far too many to pull into
+ * memory) and the battery {@code GAP_SECONDS} below, which splits a device's readings around
+ * restarts/outages so a data discontinuity is not mistaken for a battery drop.
  */
 @Repository
 public class AnomalyRepository {
+
+  // A jump larger than this between consecutive readings means the device stopped reporting
+  // (a restart/outage), not a real time step. The simulator publishes every few seconds, so any
+  // multi-minute gap is downtime; on restart a device re-initialises its battery, which would
+  // otherwise look like a huge drop when comparing across the gap.
+  private static final int GAP_SECONDS = 60;
 
   /** Battery level at the start and end of the inspected window, per device. */
   public record BatteryWindow(String deviceId, double firstPct, double lastPct) {}
@@ -37,26 +44,54 @@ public class AnomalyRepository {
     this.jdbc = jdbc;
   }
 
-  /** Uses TimescaleDB first()/last() to get battery at the window edges in one scan. */
+  /**
+   * Battery at the edges of each device's most recent <em>uninterrupted</em> run of readings within
+   * the window. Splitting on multi-minute gaps means a restart (after which the simulator
+   * re-initialises battery) can't masquerade as a drop by comparing a pre-restart reading against a
+   * post-restart one. Uses TimescaleDB first()/last() for the edges in a single scan.
+   */
   public List<BatteryWindow> batteryWindows(Instant since) {
     return jdbc.query(
         """
+        WITH points AS (
+            SELECT device_id, battery_pct, ts,
+                   CASE
+                       WHEN EXTRACT(EPOCH FROM (ts - lag(ts) OVER w)) > ? THEN 1
+                       ELSE 0
+                   END AS is_break
+            FROM telemetry
+            WHERE ts > ? AND battery_pct IS NOT NULL
+            WINDOW w AS (PARTITION BY device_id ORDER BY ts)
+        ),
+        segments AS (
+            SELECT device_id, battery_pct, ts,
+                   sum(is_break) OVER (PARTITION BY device_id ORDER BY ts) AS segment
+            FROM points
+        ),
+        ranked AS (
+            SELECT device_id, battery_pct, ts, segment,
+                   max(segment) OVER (PARTITION BY device_id) AS last_segment
+            FROM segments
+        )
         SELECT device_id,
                first(battery_pct, ts) AS first_pct,
                last(battery_pct, ts)  AS last_pct
-        FROM telemetry
-        WHERE ts > ? AND battery_pct IS NOT NULL
+        FROM ranked
+        WHERE segment = last_segment
         GROUP BY device_id
         """,
         (rs, n) ->
             new BatteryWindow(
                 rs.getString("device_id"), rs.getDouble("first_pct"), rs.getDouble("last_pct")),
+        GAP_SECONDS,
         since.atOffset(ZoneOffset.UTC));
   }
 
   /**
    * Implied speed between consecutive points via LAG; distance uses an equirectangular
-   * approximation (fine at city scale, and anomalous jumps exceed the threshold by far).
+   * approximation (fine at city scale, and anomalous jumps exceed the threshold by far). Pairs more
+   * than {@code GAP_SECONDS} apart are dropped: across a restart/outage a device re-initialises its
+   * position, and dividing that re-spawn by the gap would imply an impossible speed for everyone.
    */
   public List<GpsJump> gpsJumps(Instant since, double minSpeedKmh) {
     return jdbc.query(
@@ -76,7 +111,9 @@ public class AnomalyRepository {
                                 + power((lon - prev_lon) * cos(radians(lat)), 2) )
                      / NULLIF(EXTRACT(EPOCH FROM (ts - prev_ts)) / 3600.0, 0) AS speed_kmh
             FROM pts
-            WHERE prev_ts IS NOT NULL AND ts > prev_ts
+            WHERE prev_ts IS NOT NULL
+              AND ts > prev_ts
+              AND EXTRACT(EPOCH FROM (ts - prev_ts)) <= ?
         )
         SELECT DISTINCT ON (device_id)
                device_id, ts, lat, lon, prev_lat, prev_lon, speed_kmh
@@ -94,6 +131,7 @@ public class AnomalyRepository {
                 rs.getDouble("lon"),
                 rs.getDouble("speed_kmh")),
         since.atOffset(ZoneOffset.UTC),
+        GAP_SECONDS,
         minSpeedKmh);
   }
 
